@@ -3,7 +3,7 @@ const blessed = require('blessed');
 function createUI() {
     const screen = blessed.screen({
         smartCSR: true,
-        title: 'WhatsApp CLI Premium',
+        title: 'WhatsApp CLI Ultimate',
         fullUnicode: true,
         dockBorders: true,
         style: { bg: '#111b21' }
@@ -16,9 +16,12 @@ function createUI() {
         sidebarBg: '#202c33',
         headerBg: '#2a3942',
         text: '#e9edef',
-        gray: '#8696a0'
+        gray: '#8696a0',
+        quoteBg: '#1f2c34',
+        infoBg: '#111b21'
     };
 
+    // --- LEFT PANE ---
     const leftPane = blessed.box({
         parent: screen,
         width: '30%',
@@ -35,7 +38,7 @@ function createUI() {
         keys: true,
         border: { type: 'line', fg: theme.gray },
         style: { fg: theme.text, bg: theme.sidebarBg },
-        label: ' Search '
+        label: ' Search (Chats) '
     });
 
     const chatList = blessed.list({
@@ -54,6 +57,7 @@ function createUI() {
         tags: true
     });
 
+    // --- RIGHT PANE ---
     const rightPane = blessed.box({
         parent: screen,
         width: '70%',
@@ -70,6 +74,21 @@ function createUI() {
         style: { bg: theme.headerBg, fg: theme.text, bold: true },
         content: ' Select a chat',
         padding: { left: 1, top: 1 }
+    });
+
+    // --- INFO PANE (Hidden by default) ---
+    const infoPane = blessed.box({
+        parent: rightPane,
+        width: '30%',
+        height: '100%-3',
+        top: 3,
+        right: 0,
+        hidden: true,
+        border: { type: 'line', fg: theme.secondary },
+        style: { bg: theme.infoBg },
+        label: ' Info ',
+        tags: true,
+        padding: 1
     });
 
     const messageLog = blessed.log({
@@ -102,10 +121,24 @@ function createUI() {
         keys: true,
         style: { fg: theme.text, bg: theme.headerBg },
         padding: { left: 1 },
-        cursor: { terminal: true, blink: true, color: theme.primary }
+        cursor: { terminal: true, blink: true, color: theme.primary },
+        label: ' Type a message ( /send <file> ) '
     });
 
-    return { screen, chatList, searchInput, messageLog, chatHeader, messageInput, theme };
+    // Color Generator for Participants
+    const getParticipantColor = (name) => {
+        const colors = ['red', 'green', 'yellow', 'blue', 'magenta', 'cyan'];
+        let hash = 0;
+        for (let i = 0; i < name.length; i++) {
+            hash = name.charCodeAt(i) + ((hash << 5) - hash);
+        }
+        return colors[Math.abs(hash) % colors.length];
+    };
+
+    return { 
+        screen, chatList, searchInput, messageLog, chatHeader, messageInput, infoPane, 
+        theme, getParticipantColor 
+    };
 }
 
 const ASCII_LOGO = `

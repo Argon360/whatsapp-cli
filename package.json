@@ -17,6 +17,8 @@
     "blessed": "^0.1.81",
     "mime-types": "^3.0.2",
     "node-emoji": "^2.2.0",
+    "node-notifier": "^10.0.1",
+    "open": "^11.0.0",
     "pino": "^10.3.0",
     "qrcode-terminal": "^0.12.0"
   }

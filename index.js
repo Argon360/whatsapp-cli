@@ -8,18 +8,20 @@ const fs = require('fs');
 const path = require('path');
 const { exec } = require('child_process');
 const mimetype = require('mime-types');
+const notifier = require('node-notifier');
+const open = require('open');
 
 async function startApp() {
     const ui = createUI();
     let selectedChatId = null;
     let sidebarJids = [];
     let currentFilter = '';
+    let isGlobalSearch = false; // Toggle for Ctrl+F
     const SEVEN_DAYS_S = 7 * 24 * 60 * 60;
     const nowS = Math.floor(Date.now() / 1000);
 
     ui.messageLog.log(ASCII_LOGO);
 
-    // Initial Database Cleanup
     Statements.prune.run(nowS - (30 * 24 * 60 * 60));
 
     const getTimestamp = (ts) => {
@@ -44,17 +46,18 @@ async function startApp() {
         
         if (m.fromMe) {
             const status = getStatusIcon(m.status);
-            const content = `${text}  ${time} ${status}`;
-            const padding = Math.max(0, Math.floor(width * 0.9) - content.length);
+            // Right align logic
+            const contentLen = text.length + time.length + 4; // approx
+            const padding = Math.max(0, width - contentLen - 2); 
             return ' '.repeat(padding) + `{#25D366-fg}${text}{/#25D366-fg} {gray-fg}${time}{/gray-fg} ${status}`;
         } else {
-            // Sender resolution: prioritization based on available data
-            let sender = m.contactName;
-            if (!sender || sender === m.participant || sender === m.remoteJid) {
-                const jid = m.participant || m.remoteJid;
-                sender = jid ? jid.split('@')[0] : 'Them';
-            }
-            const prefix = m.remoteJid.endsWith('@g.us') ? `{blue-fg}${sender}{/blue-fg}:\n` : '';
+            let senderName = m.contactName || m.pushName;
+            let jid = m.participant || m.remoteJid;
+            
+            if (!senderName) senderName = jid ? jid.split('@')[0] : 'Them';
+            
+            const color = ui.getParticipantColor(senderName);
+            const prefix = m.remoteJid.endsWith('@g.us') ? `{${color}-fg}${senderName}{/${color}-fg}:\n` : '';
             return `${prefix}{white-fg}${text}{/white-fg} {gray-fg}${time}{/gray-fg}`;
         }
     };
@@ -74,19 +77,57 @@ async function startApp() {
             ui.messageLog.log(formatMessage(m, width));
         });
         ui.messageLog.setScrollPerc(100);
+        
+        // Update Info Pane if visible
+        if (!ui.infoPane.hidden) updateInfoPane(id);
+        
         ui.screen.render();
     };
 
+    const updateInfoPane = (id) => {
+        const chat = Statements.getChat.get(id);
+        if (!chat) return;
+        
+        let content = `{bold}${chat.name}{/bold}\n\n`;
+        content += `Type: ${chat.isGroup ? 'Group' : 'Private'}\n`;
+        if (chat.description) content += `\n{bold}Description:{/bold}\n${chat.description}\n`;
+        
+        // Show participants if available (parsed from JSON)
+        if (chat.participants) {
+            try {
+                const parts = JSON.parse(chat.participants);
+                content += `\n{bold}Participants (${parts.length}):{/bold}\n`;
+                parts.forEach(p => {
+                    const contact = Statements.getContact.get(p);
+                    content += `- ${contact ? contact.name : p.split('@')[0]}\n`;
+                });
+            } catch (e) {}
+        }
+        
+        ui.infoPane.setContent(content);
+    };
+
     const updateSidebar = () => {
-        const rows = Statements.getChats.all(`%${currentFilter}%`, `%${currentFilter}%`, `%${currentFilter}%`);
-        sidebarJids = rows.map(r => r.id);
-        ui.chatList.setItems(rows.map(chat => {
-            const unread = chat.unreadCount > 0 ? ` {white-bg}{black-fg} ${chat.unreadCount} {/black-fg}{/white-bg}` : '';
-            const type = chat.isGroup ? '{yellow-fg}󰼀{/yellow-fg}' : '{blue-fg}󰭹{/blue-fg}';
-            const name = chat.contactName || chat.name || chat.id.split('@')[0];
-            const prefix = selectedChatId === chat.id ? '{bold}> {/bold}' : '  ';
-            return `${prefix}${type} ${name}${unread}`;
-        }));
+        let rows;
+        if (isGlobalSearch && currentFilter) {
+            // Global Message Search
+            rows = Statements.searchMessages.all(`%${currentFilter}%`);
+            sidebarJids = rows.map(r => r.remoteJid);
+            ui.chatList.setItems(rows.map(m => {
+                return `{yellow-fg}"${m.text}"{/yellow-fg}\n{gray-fg}in ${m.chatName || m.remoteJid}{/gray-fg}`;
+            }));
+        } else {
+            // Standard Chat List
+            rows = Statements.getChats.all(`%${currentFilter}%`, `%${currentFilter}%`, `%${currentFilter}%`);
+            sidebarJids = rows.map(r => r.id);
+            ui.chatList.setItems(rows.map(chat => {
+                const unread = chat.unreadCount > 0 ? ` {white-bg}{black-fg} ${chat.unreadCount} {/black-fg}{/white-bg}` : '';
+                const type = chat.isGroup ? '{yellow-fg}󰼀{/yellow-fg}' : '{blue-fg}󰭹{/blue-fg}';
+                const name = chat.contactName || chat.name || chat.id.split('@')[0];
+                const prefix = selectedChatId === chat.id ? '{bold}> {/bold}' : '  ';
+                return `${prefix}${type} ${name}${unread}`;
+            }));
+        }
         ui.screen.render();
     };
 
@@ -98,18 +139,15 @@ async function startApp() {
         
         const ts = getTimestamp(m.messageTimestamp);
         
-        // 7-day initial load constraint
         if (!force && (nowS - ts > SEVEN_DAYS_S)) return;
 
         let text = m.message.conversation || m.message.extendedTextMessage?.text || '';
         let mediaPath = null;
 
-        // Media Handling
         const messageType = Object.keys(m.message)[0];
         if (['imageMessage', 'videoMessage', 'audioMessage', 'documentMessage', 'stickerMessage'].includes(messageType)) {
             const media = m.message[messageType];
-            const emojiMap = { imageMessage: '📷 Image', videoMessage: '🎥 Video', audioMessage: '🎙️ Audio', documentMessage: '📄 Doc', stickerMessage: '🎨 Sticker' };
-            const label = emojiMap[messageType] || '[Media]';
+            const label = { imageMessage: '📷', videoMessage: '🎥', audioMessage: '🎙️', documentMessage: '📄', stickerMessage: '🎨' }[messageType] || '📎';
             const caption = media.caption || media.fileName || '';
             text = `{italic}[${label}] ${caption}{/italic}`;
 
@@ -129,7 +167,18 @@ async function startApp() {
         const chat = Statements.getChat.get(jid);
         if (chat) {
             if (ts > chat.timestamp) Statements.updateChatTimestamp.run(ts, jid);
-            if (!m.key.fromMe && selectedChatId !== jid) Statements.incUnread.run(jid);
+            if (!m.key.fromMe && selectedChatId !== jid) {
+                Statements.incUnread.run(jid);
+                // NOTIFICATION
+                if (!force) { // Only notify for real-time
+                    const senderName = pushName || participant;
+                    notifier.notify({
+                        title: `New Message from ${senderName}`,
+                        message: text,
+                        sound: true
+                    });
+                }
+            }
         } else {
             Statements.saveChat.run(jid, m.pushName || jid, ts, jid.endsWith('@g.us') ? 1 : 0, (!m.key.fromMe ? 1 : 0));
         }
@@ -140,12 +189,15 @@ async function startApp() {
             case 'connection.update':
                 if (data.qr) { ui.screen.destroy(); qrcode.generate(data.qr, { small: true }); }
                 if (data.connection === 'open') { ui.chatHeader.setContent(' {bold}WhatsApp Premium{/bold} - {green-fg}Online{/green-fg}'); updateSidebar(); }
-                if (data.connection === 'close' && data.lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut) startApp();
                 break;
             case 'messaging-history.set':
                 if (data.contacts) data.contacts.forEach(c => Statements.saveContact.run(c.id, c.name || c.verifiedName || c.notify));
                 if (data.messages) { for (const m of data.messages) await storeMessage(m); }
                 if (data.chats) data.chats.forEach(c => {
+                    if (c.participants) { // Store participants for info pane
+                        const parts = c.participants.map(p => p.id);
+                        Statements.updateChatMetadata.run(null, JSON.stringify(parts), c.id);
+                    }
                     const ts = c.t || 0;
                     if (!Statements.getChat.get(c.id) && ts > (nowS - SEVEN_DAYS_S)) {
                         Statements.saveChat.run(c.id, c.name || c.id, ts, c.id.endsWith('@g.us') ? 1 : 0, c.unreadCount || 0);
@@ -169,8 +221,15 @@ async function startApp() {
                 break;
             case 'groups.upsert':
                 data.forEach(g => {
-                    if (Statements.getChat.get(g.id)) Statements.updateChatName.run(g.subject, g.id);
-                    else Statements.saveChat.run(g.id, g.subject, nowS, 1, 0);
+                    // Save group metadata
+                    const parts = g.participants.map(p => p.id);
+                    if (Statements.getChat.get(g.id)) {
+                        Statements.updateChatName.run(g.subject, g.id);
+                        Statements.updateChatMetadata.run(g.desc, JSON.stringify(parts), g.id);
+                    } else {
+                        Statements.saveChat.run(g.id, g.subject, nowS, 1, 0);
+                        Statements.updateChatMetadata.run(g.desc, JSON.stringify(parts), g.id);
+                    }
                 });
                 updateSidebar();
                 break;
@@ -200,7 +259,31 @@ async function startApp() {
     });
 
     ui.messageInput.on('submit', async (text) => {
-        if (text && selectedChatId) {
+        if (!text) return;
+        
+        // Handle /send command
+        if (text.startsWith('/send ') && selectedChatId) {
+            const filePath = text.split('/send ')[1].trim();
+            if (fs.existsSync(filePath)) {
+                try {
+                    // Send as document/image
+                    await sock.sendMessage(selectedChatId, { 
+                        document: { url: filePath }, 
+                        mimetype: mimetype.lookup(filePath) || 'application/octet-stream',
+                        fileName: path.basename(filePath)
+                    });
+                    ui.messageInput.clearValue();
+                    ui.messageInput.focus();
+                    ui.screen.render();
+                    return;
+                } catch(e) { ui.messageLog.log(`{red-fg}Send Failed: ${e.message}{/red-fg}`); }
+            } else {
+                ui.messageLog.log('{red-fg}File not found{/red-fg}');
+                return;
+            }
+        }
+
+        if (selectedChatId) {
             const parsedText = emoji.emojify(text);
             try {
                 const sent = await sock.sendMessage(selectedChatId, { text: parsedText });
@@ -234,6 +317,29 @@ async function startApp() {
                  renderChatHistory(selectedChatId);
              }
          } catch (e) {}
+    });
+
+    // Global Search Toggle
+    ui.screen.key(['C-f'], () => {
+        isGlobalSearch = !isGlobalSearch;
+        ui.searchInput.setLabel(isGlobalSearch ? ' Global Search (Msg) ' : ' Search (Chats) ');
+        ui.searchInput.focus();
+        ui.searchInput.readInput();
+        ui.screen.render();
+    });
+
+    // Info Pane Toggle
+    ui.screen.key(['C-i'], () => {
+        if (ui.infoPane.hidden) {
+            ui.infoPane.show();
+            if (selectedChatId) updateInfoPane(selectedChatId);
+            // Resize message log to fit
+            ui.messageLog.width = '70%'; 
+        } else {
+            ui.infoPane.hide();
+            ui.messageLog.width = '100%';
+        }
+        ui.screen.render();
     });
 
     ui.searchInput.on('focus', () => ui.searchInput.readInput());

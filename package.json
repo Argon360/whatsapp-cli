@@ -1,0 +1,22 @@
+{
+  "name": "whatsapp-cli",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@whiskeysockets/baileys": "^7.0.0-rc.9",
+    "better-sqlite3": "^12.6.2",
+    "blessed": "^0.1.81",
+    "mime-types": "^3.0.2",
+    "node-emoji": "^2.2.0",
+    "pino": "^10.3.0",
+    "qrcode-terminal": "^0.12.0"
+  }
+}

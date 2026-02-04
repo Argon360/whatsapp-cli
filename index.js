@@ -54,8 +54,7 @@ async function startApp() {
                 const jid = m.participant || m.remoteJid;
                 sender = jid ? jid.split('@')[0] : 'Them';
             }
-            const prefix = m.remoteJid.endsWith('@g.us') ? `{blue-fg}${sender}{/blue-fg}:
-` : '';
+            const prefix = m.remoteJid.endsWith('@g.us') ? `{blue-fg}${sender}{/blue-fg}:\n` : '';
             return `${prefix}{white-fg}${text}{/white-fg} {gray-fg}${time}{/gray-fg}`;
         }
     };
